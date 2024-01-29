@@ -85,7 +85,7 @@ for key in records:
     else:
         pass
         # print('update on', original, 'and', updated_columns, ':', record)
-    
+
     #check version 0 for record
     record = query.select_version(key, 0, [1, 1, 1, 1, 1], 0)[0]
     error = False
@@ -96,7 +96,7 @@ for key in records:
         print('update error on', records[key], 'and', updated_columns, ':', record, ', correct:', updated_records[key])
 
 keys = sorted(list(records.keys()))
-# aggregate on every column 
+# aggregate on every column
 for c in range(0, grades_table.num_columns):
     for i in range(0, number_of_aggregates):
         r = sorted(sample(range(0, len(keys)), 2))

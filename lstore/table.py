@@ -1,4 +1,5 @@
 from lstore.index import Index
+from lstore.page import Page
 from time import time
 
 INDIRECTION_COLUMN = 0
@@ -13,6 +14,12 @@ class Record:
         self.rid = rid
         self.key = key
         self.columns = columns
+        self.indirection = -1
+        self.schema_encoding = []
+        self.is_base = True
+
+    def get_key(self):
+        return self.columns[self.key]
 
 class Table:
 
@@ -27,7 +34,10 @@ class Table:
         self.num_columns = num_columns
         self.page_directory = {}
         self.index = Index(self)
-        pass
+        self.farthest = {'pi': 0, 'slot_index': -1}
+        for i in range(16):
+            self.page_directory[i] = Page()
+            self.page_directory[i].id = i
 
     def __merge(self):
         print("merge is happening")
