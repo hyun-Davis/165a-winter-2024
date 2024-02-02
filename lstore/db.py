@@ -39,4 +39,4 @@ class Database():
     def get_table(self, name):
         for i in range(len(tables)):
             if tables[i].name == name:
-                return tables
+                return tables[i]
