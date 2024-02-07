@@ -28,15 +28,15 @@ class Database():
     # Deletes the specified table
     """
     def drop_table(self, name):
-        for i in range(len(tables)):
-            if tables[i].name == name:
-                del(tables[i])
+        for i in range(len(self.tables)):
+            if self.tables[i].name == name:
+                del(self.tables[i])
                 break
 
     """
     # Returns table with the passed name
     """
     def get_table(self, name):
-        for i in range(len(tables)):
-            if tables[i].name == name:
-                return tables[i]
+        for i in range(len(self.tables)):
+            if self.tables[i].name == name:
+                return self.tables[i]
