@@ -55,7 +55,9 @@ class Index:
 
         for i in range(table.num_columns):
             self.create_index(i)
-
+        
+        #TODO: insert individual records into the index.
+                
         pass
 
 
