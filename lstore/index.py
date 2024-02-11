@@ -10,6 +10,7 @@ class IndexNode:
     def __init__(self, in_value, in_rid):
         self.value = in_value
         self.rid = in_rid
+        self.num_records = 0
         self.next = None
 
 """
@@ -20,7 +21,6 @@ class IndexStore:
     def __init__(self):
         self.stored_records = {}
         self.first_node = None
-        self.maximum_value = None
         self.sorted_seeds = {}
     
     # Finds the largest key that is smaller than the desired value.
@@ -50,9 +50,6 @@ class IndexStore:
     
     def insert_record(self, in_value, in_rid):
 
-        if (self.maximum_value is None) or (self.maximum_value < in_value):
-            self.maximum_value = in_value
-
         new_node = IndexNode(in_value, in_rid)
         if self.first_node is None:
             # There is no first node, making this the first.
@@ -71,23 +68,28 @@ class IndexStore:
         # Hash the rid into its storage location in the hash table
         self.stored_records[in_value].append(new_node)
 
+        self.num_records += 1
+
         # Update the sorted seeds.
         """
         Randomly step through values up to max_node divided by some value.
         """
-        max_node = self.find_largest_smaller_key(self.maximum_value + 1)
         # TODO: more intelligent addition of values.
-        i = self.first.node.value + random.randint(1, max_node.value / 5)
+        
+        self.sorted_seeds.clear()
+        '''
+        i = self.first.node.value + random.randint(1, self.maximum_value / 5)
 
         self.sorted_seeds.clear()
 
         # Sequentially add to sorted_seeds until the maximum node value.
-        while i < max_node.value:
+        while i < self.maximum_value:
             
             # As a set, sorted_seeds should reject duplicates.
             self.sorted_seeds.add(self.find_largest_smaller_key(i))
         
         self.sorted_seeds.sort()
+        '''
 
 
 
