@@ -9,8 +9,14 @@ Internal node object used for quickly traversing values stored in the index.
 class IndexNode:
     def __init__(self, in_value, in_rid):
         self.value = in_value
+<<<<<<< Updated upstream
         self.rid = in_rid
         self.num_records = 0
+=======
+
+        # Multiple RID's can map to the same node.
+        self.rid = [in_rid]
+>>>>>>> Stashed changes
         self.next = None
 
 """
@@ -21,7 +27,11 @@ class IndexStore:
     def __init__(self):
         self.stored_records = {}
         self.first_node = None
+<<<<<<< Updated upstream
         self.sorted_seeds = {}
+=======
+        self.sorted_seeds = []
+>>>>>>> Stashed changes
     
     # Finds the largest key that is smaller than the desired value.
     def find_largest_smaller_key(self, desired_value):
@@ -47,6 +57,7 @@ class IndexStore:
             desired_node = desired_node.next
         
         return desired_node
+<<<<<<< Updated upstream
     
     def insert_record(self, in_value, in_rid):
 
@@ -54,21 +65,64 @@ class IndexStore:
         if self.first_node is None:
             # There is no first node, making this the first.
             self.first_node = new_node
+=======
+
+    def make_seeds(self):
+        
+        # We want to create one new seed for every 100 seeds.
+        count = math.ceil(len(self.stored_records) / 100)
+        seeds_i = random.sample(range(0, len(self.stored_records)), count)
+        
+        # Reset the seed counter
+        self.sorted_seeds.clear()
+        for i in seeds_i:
+            self.sorted_seeds.append(self.stored_records[i])
+
+        self.sorted_seeds.sort(key=lambda value: value)
+
+    def insert_record(self, in_value, in_rid):
+
+        if in_value in self.stored_records:
+            
+            # The requested value already exists in the records.
+            # Simply append the newest RID into the list of existing ones.
+
+            self.stored_records[in_value].rid.append(in_rid)
+            return
+>>>>>>> Stashed changes
         else:
-            if self.first_node.value > in_value:
-                # the new node is smaller than the current smallest.
-                new_node.next = self.first_node
+
+            # The new record has never been seen before.
+
+            new_node = IndexNode(in_value, in_rid)
+            if self.first_node is None:
+
+                # There is no first node, making this the first.
                 self.first_node = new_node
             else:
-                # insert the record's node into the list of nodes.
-                new_child_node = self.find_largest_smaller_key(in_value)
-                new_node.next = new_child_node.next
-                new_child_node.next = new_node
 
-        # Hash the rid into its storage location in the hash table
-        self.stored_records[in_value].append(new_node)
+                if self.first_node.value > in_value:
 
+<<<<<<< Updated upstream
         self.num_records += 1
+=======
+                    # the new node is smaller than the current smallest.
+                    new_node.next = self.first_node
+                    self.first_node = new_node
+                else:
+                    
+                    # insert the record's node into the list of nodes.
+                    new_child_node = self.find_largest_smaller_key(in_value)
+                    new_node.next = new_child_node.next
+                    new_child_node.next = new_node
+
+            # Hash the rid into its storage location in the hash table
+            self.stored_records[in_value].append(new_node)
+
+        # Refresh the stored seeds for the provided data, if required.
+        if len(self.stored_records) % 100 == 0:
+            self.make_seeds()
+>>>>>>> Stashed changes
 
         # Update the sorted seeds.
         """
@@ -122,6 +176,15 @@ class Index:
     def locate(self, column, value):
         
         # All data that maps to value should hash to indices[column]
+        foundNode = self.indices[column].find_largest_smaller_key(value)
+        if not(foundNode is None):
+            foundNode = foundNode.next
+
+        if foundNode is None:
+            return None
+        else:
+            return foundNode.rid
+
         return self.indices[column].stored_records[value][:]
         
     """
@@ -134,12 +197,28 @@ class Index:
 
         col_data = self.indices[column]
         desired_node = col_data.find_largest_smaller_key(begin)
+<<<<<<< Updated upstream
         if not(desired_node is None):
 
           # the first node found is actually the one smaller than begin.
           desired_node = desired_node.next  
           while desired_node != None and desired_node.value <= end:
               foundRIDs.append(desired_node.rid)
+=======
+
+        # Find the first node with the matching index.
+        '''
+        while desired_node is not None and desired_node.next is not None and desired_node.next.value <= begin:
+            desired_node = desired_node.next
+        '''
+
+        # Add every subsequent node that is within the range.
+        while desired_node is not None and desired_node.next is not None and desired_node.next.value <= end:
+            # the first node found is actually the one smaller than begin.
+            desired_node = desired_node.next
+            for rid in desired_node.rid:
+                foundRIDs.append(rid)
+>>>>>>> Stashed changes
 
         return foundRIDs
 
