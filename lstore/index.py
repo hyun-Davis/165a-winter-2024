@@ -47,8 +47,8 @@ class IndexStore:
 
     def make_seeds(self):
         count = math.ceil(len(self.stored_records) / 100)
-        seeds = self.RNG.sample(self.stored_records.items(), count)
-        seeds_v = [s[0] for s in seeds]
+        seeds = self.RNG.sample(list(self.stored_records), count)
+        seeds_v = seeds
         seeds_v.sort()
         self.sorted_seeds.clear()
         for v in seeds_v:
