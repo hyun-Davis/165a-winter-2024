@@ -76,6 +76,7 @@ class Table:
         self.num_records = 0
         self.num_updates = 0
         self.key_RID = {}
+        self.farthest = {'pi': 0, 'slot_index': -1}
 
         # Create lock objects for multi-threading
         self.lock_manager = defaultdict()
