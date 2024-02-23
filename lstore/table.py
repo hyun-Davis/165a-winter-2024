@@ -2,14 +2,9 @@ import os
 
 from lstore.index import Index
 from lstore.page import Page, Record
+from lstore.config import *
 #from time import time
 import pickle
-
-
-INDIRECTION_COLUMN = 0
-RID_COLUMN = 1
-TIMESTAMP_COLUMN = 2
-SCHEMA_ENCODING_COLUMN = 3
 
 
 class Table:
@@ -21,8 +16,8 @@ class Table:
     """
     def __init__(self, name, num_columns, key, path = ''):
         self.path = path
-        self.page_partition = 4096
-        self.slot_size = 8
+        self.page_partition = PAGE_SIZE
+        self.slot_size = PAGE_SLOT_SIZE
         self.name = name
         self.key = key
         self.num_columns = num_columns

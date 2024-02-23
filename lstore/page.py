@@ -1,3 +1,4 @@
+from lstore.config import *
 import math
 import struct
 import os
@@ -19,7 +20,7 @@ class Record:
 class Page:
 
     def __init__(self, path, id, index, num_columns, read=False):
-        self.slot_size = 8 #number of bytes that can be stored in a slot
+        self.slot_size = PAGE_SLOT_SIZE #number of bytes that can be stored in a slot
         self.num_columns = num_columns
         self.initialized = False
         self.dirty = False
@@ -29,7 +30,7 @@ class Page:
         self.TPS = [-1] * (self.num_columns + 1)
         self.pin = 0
         self.num_records = 0
-        self.data = bytearray(4096)
+        self.data = bytearray(PAGE_SIZE)
         self.records = {}
         self.path = path
         self.id = id
