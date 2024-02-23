@@ -1,39 +1,155 @@
 from lstore.table import Table, Record
 from lstore.index import Index
-
+import math
+import time
 
 class Query:
     """
-    # Creates a Query object that can perform different queries on the specified table 
+    # Creates a Query object that can perform different queries on the specified table
     Queries that fail must return False
     Queries that succeed should return the result or True
     Any query that crashes (due to exceptions) should return False
     """
     def __init__(self, table):
         self.table = table
-        pass
 
-    
+
     """
     # internal Method
     # Read a record with specified RID
     # Returns True upon succesful deletion
     # Return False if record doesn't exist or is locked due to 2PL
     """
+
     def delete(self, primary_key):
-        pass
-    
-    
+        base = self.find_base_record(primary_key, 0)
+        record = self.get_record(base['pi'], base['rid'], [])
+        if record.indirection == -1:
+            record.rid = -1
+            return
+        self.delete_loop(base['pi'], record)
+
+    #set rids of all records for deletion following the lineage to -1
+    def delete_loop(self, page_id, from_record):
+        if from_record.rid == -1:
+            return
+        from_record.rid = -1
+        self.delete_loop(page_id, self.get_record(page_id, from_record.indirection, []))
+
+    #given the key value and key column's index, return the corresponding base record's logical location.
+    def find_base_record(self, key, key_index):
+        projected_columns_index = [0] * (key_index + 1)
+        projected_columns_index[key_index] = 0
+        if self.table.catalog['index'].indices[key_index] is not None:
+            return self.table.catalog['index'].locate(key_index, key)
+        for i in range(self.table.catalog['farthest']['pi'] + 1):
+            page = self.table.get_page(i, 0)
+            for j in range(page.get_slot_limit()):
+                if j not in page.records or not self.check_record_validity(page.get_record(j, projected_columns_index), key, key_index):
+                    continue
+                return {'pi': i, 'rid': page.records[j].rid}
+        return None
+
+    #returns the next available slot in base page.
+    def find_first_free_slot(self, replace=False):
+        pi = 0
+        while True:
+            page = self.table.get_page(pi, 0)
+            if not page.has_capacity():
+                pi += 1
+                continue
+            if not replace:
+                return {'pi': pi, 'slot_index': page.num_records}
+            for i in range(page.get_slot_limit()):
+                if i in page.records and page.records[i].rid != -1:
+                    continue
+                return {'pi': pi, 'slot_index': i}
+        return None
+
+    #keep track of the farthest page stack and base slot.
+    def check_is_farthest(self, slot):
+        if (slot['pi'] > self.table.catalog['farthest']['pi']) or (slot['pi'] == self.table.catalog['farthest']['pi'] and slot['slot_index'] > self.table.catalog['farthest']['slot_index']):
+            self.table.catalog['farthest'] = slot
+
+    #given a record and key column's index, check if it matches the specified key value.
+    def check_record_validity(self, record, key, key_index):
+        if record.rid == -1 or record.columns[key_index] != key:
+            return False
+        return True
+
+    #check if a value falls within the range from start to end
+    def check_range(self, start, end, v):
+        if v < start or v > end:
+            return False
+        return True
+
+    #given page_id and rid, retrieve a record containing values of specified columns.
+    def get_record(self, page_id, rid, projected_columns_index):
+        slot_limit = math.floor(self.table.page_partition / self.table.slot_size)
+        page_index = math.floor(rid / slot_limit)
+        slot_index = rid % slot_limit
+        return self.table.get_page(page_id, page_index).get_record(slot_index, projected_columns_index)
+
+    #returns the latest version of a record by following indirection forward.
+    def get_latest_version_rid(self, page_id, from_rid):
+        indirection = self.get_record(page_id, from_rid, []).indirection
+        if indirection == -1:
+            return from_rid
+        return indirection
+
+    #returns the relative version of a record by following indirection backward.
+    def get_relative_version_rid(self, page_id, base_rid, relative_version):
+        return self.relative_version_rid_loop(page_id, self.get_latest_version_rid(page_id, base_rid), base_rid, relative_version)
+
+    def relative_version_rid_loop(self, page_id, from_rid, base_rid, relative_version):
+        indirection = self.get_record(page_id, from_rid, []).indirection
+        if indirection == -1 or relative_version == 0 or from_rid == base_rid:
+            return from_rid
+        return self.relative_version_rid_loop(page_id, indirection, base_rid, relative_version + 1)
+
+    #get values from the requested column given the condition where its corresponding key column values are within a specified range.
+    def get_values_from_range(self, start_range, end_range, key_index, search_index, relative_version=0):
+        _range = max(key_index, search_index)
+        projected_columns_index = [0] * (_range + 1)
+        projected_columns_index[key_index] = 1
+        projected_columns_index[search_index] = 1
+        result = []
+        if self.table.catalog['index'].indices[key_index] is not None:
+            info = self.table.catalog['index'].locate_range(start_range, end_range, key_index)
+            for base in info:
+                result.append(self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version), projected_columns_index).columns[search_index])
+            return result
+        for i in range(self.table.catalog['farthest']['pi'] + 1):
+            page = self.table.get_page(i, 0)
+            for j in range(page.get_slot_limit()):
+                if j not in page.records or page.records[j].rid == -1:
+                    continue
+                record = self.get_record(i, self.get_relative_version_rid(i, page.records[j].rid, relative_version))
+                if not self.check_range(start_range, end_range, record.columns[key_index]):
+                    continue
+                result.append(record.columns[search_index])
+        return result
+
+
     """
     # Insert a record with specified columns
     # Return True upon succesful insertion
     # Returns False if insert fails for whatever reason
     """
-    def insert(self, *columns):
-        schema_encoding = '0' * self.table.num_columns
-        pass
 
-    
+    def insert(self, *columns):
+        slot = self.find_first_free_slot()
+        self.check_is_farthest(slot)
+        page = self.table.get_page(slot['pi'], 0)
+        rid = slot['slot_index']
+        new_record = Record(rid, 0, columns)
+        new_record.schema_encoding = '0' * self.table.num_columns
+        page.write(new_record)
+        for i in range(len(columns)):
+            if self.table.catalog['index'].indices[i] is not None:
+                self.table.catalog['index'].indices[i].insert_record(columns[i], rid, slot['pi'])
+        return True
+
     """
     # Read matching record with specified search key
     # :param search_key: the value you want to search based on
@@ -44,9 +160,8 @@ class Query:
     # Assume that select will never be called on a key that doesn't exist
     """
     def select(self, search_key, search_key_index, projected_columns_index):
-        pass
+        return self.select_version(search_key, search_key_index, projected_columns_index, 0)
 
-    
     """
     # Read matching record with specified search key
     # :param search_key: the value you want to search based on
@@ -58,18 +173,47 @@ class Query:
     # Assume that select will never be called on a key that doesn't exist
     """
     def select_version(self, search_key, search_key_index, projected_columns_index, relative_version):
-        pass
+        base = self.find_base_record(search_key, search_key_index)
+        selected = [self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version), projected_columns_index)]
+        return selected
 
-    
+
     """
     # Update a record with specified key and columns
     # Returns True if update is succesful
     # Returns False if no records exist with given key or if the target record cannot be accessed due to 2PL locking
     """
     def update(self, primary_key, *columns):
-        pass
+        projected_columns_index = [1] * len(columns)
+        for i, v in enumerate(columns):
+            if v is None:
+                projected_columns_index[i] = 0
+        base = self.find_base_record(primary_key, 0)
+        last_rid = self.get_latest_version_rid(base['pi'], base['rid'])
+        last_record = self.get_record(base['pi'], last_rid, projected_columns_index)
+        index = self.table.catalog['stack_size'][base['pi']] - 1
+        if index == 0:
+            tail = self.table.add_tail(base['pi'])
+            index += 1
+        else:
+            tail = self.table.get_page(base['pi'], index)
+        if not tail.has_capacity():
+            tail = self.table.add_tail(base['pi'])
+            index += 1
+        rid = index * math.floor(self.table.page_partition / self.table.slot_size) + tail.num_records
+        self.get_record(base['pi'], base['rid'], []).indirection = rid
+        new_columns = []
+        for k, v in enumerate(columns):
+            if v is None:
+                new_columns.append(last_record.columns[k])
+            else:
+                new_columns.append(v)
+        new_record = Record(rid, 0, new_columns, last_rid)
+        tail.write(new_record)
+        return True
 
-    
+
+
     """
     :param start_range: int         # Start of the key range to aggregate 
     :param end_range: int           # End of the key range to aggregate 
@@ -79,9 +223,9 @@ class Query:
     # Returns False if no record exists in the given range
     """
     def sum(self, start_range, end_range, aggregate_column_index):
-        pass
+        return self.sum_version(start_range, end_range, aggregate_column_index, 0)
 
-    
+
     """
     :param start_range: int         # Start of the key range to aggregate 
     :param end_range: int           # End of the key range to aggregate 
@@ -92,9 +236,12 @@ class Query:
     # Returns False if no record exists in the given range
     """
     def sum_version(self, start_range, end_range, aggregate_column_index, relative_version):
-        pass
+        count = 0
+        a = self.get_values_from_range(start_range, end_range, 0, aggregate_column_index, relative_version)
+        for i in a:
+            count += i
+        return count
 
-    
     """
     incremenets one column of the record
     this implementation should work if your select and update queries already work
