@@ -1,7 +1,7 @@
-from lstore.config import *
 import math
 import struct
 import os
+from lstore import config
 
 class Record:
 
@@ -20,34 +20,37 @@ class Record:
 class Page:
 
     def __init__(self, path, id, index, num_columns, read=False):
-        self.slot_size = PAGE_SLOT_SIZE #number of bytes that can be stored in a slot
+        self.old = None
         self.num_columns = num_columns
         self.initialized = False
         self.dirty = False
-        self.loaded = [0] * (self.num_columns + 1)
-        if not read:
-            self.loaded = [1] * (self.num_columns + 1)
-        self.TPS = [-1] * (self.num_columns + 1)
         self.pin = 0
         self.num_records = 0
-        self.data = bytearray(PAGE_SIZE)
+        self.data = bytearray(4096)
         self.records = {}
         self.path = path
         self.id = id
         self.index = index
+        self.loaded = [0] * (self.num_columns + 1)
+        if not read:
+            self.loaded = [1] * (self.num_columns + 1)
+        self.TPS = [self.get_slot_limit() * 2 - 1] * self.num_columns
         if read:
             if not os.path.exists(self.get_file_path('info')):
                 return
             with open(self.get_file_path('info'), "rb") as file:
                 self.initialized = self.read_value_from_file(file, 0, 'bool')
+                self.num_records = self.read_value_from_file(file, 1, 'int')
                 self.load_meta('rid')
-                self.load_meta('key')
                 self.load_meta('indirection')
+                if self.index == 0:
+                    for i in range(self.num_columns):
+                        self.TPS[i] = self.read_value_from_file(file, 2 + self.num_columns + i, 'int')
 
 
     #maximum amount of slots for each physical page.
     def get_slot_limit(self):
-        return math.floor(len(self.data) / self.slot_size)
+        return math.floor(len(self.data) / config.PAGE_SLOT_SIZE)
 
     #whether or not the page has capacity to keep writing
     def has_capacity(self):
@@ -78,9 +81,9 @@ class Page:
         with open(self.get_file_path(name), "rb") as file:
             byte_arr = self.read_column_bytes(file)
             for position in range(self.get_slot_limit()):
-                byte_i = position * self.slot_size
+                byte_i = position * config.PAGE_SLOT_SIZE
                 self.record_load_check(position)
-                setattr(self.records[position], name, self.read_value(byte_arr[byte_i:byte_i+self.slot_size], 'int'))
+                setattr(self.records[position], name, self.read_value(byte_arr[byte_i:byte_i+config.PAGE_SLOT_SIZE], 'int'))
 
     #load a data column
     def load_column(self, column):
@@ -89,9 +92,9 @@ class Page:
         with open(self.get_file_path(self.get_column_name(column)), "rb") as file:
             byte_arr = self.read_column_bytes(file)
             for position in range(self.get_slot_limit()):
-                byte_i = position * self.slot_size
+                byte_i = position * config.PAGE_SLOT_SIZE
                 self.record_load_check(position)
-                self.records[position].columns[column] = self.read_value(byte_arr[byte_i:byte_i+self.slot_size], _type)
+                self.records[position].columns[column] = self.read_value(byte_arr[byte_i:byte_i+config.PAGE_SLOT_SIZE], _type)
 
     #read the bytes of a physical page
     def read_column_bytes(self, file):
@@ -101,12 +104,12 @@ class Page:
     #read the bytes in a slot at position.
     def read_bytes(self, file, position):
         file.seek(self.get_address(position))
-        return file.read(self.slot_size)
+        return file.read(config.PAGE_SLOT_SIZE)
 
     #read bytes into value.
     def read_value(self, _bytes, _type):
         if _type == 'int':
-            return int.from_bytes(_bytes, 'big')
+            return int.from_bytes(_bytes, 'little', signed=True)
         elif _type == 'str':
             return _bytes.decode().strip('\0')
         elif _type == 'bool':
@@ -116,9 +119,9 @@ class Page:
     #write a value into bytes.
     def write_value(self, value):
         if isinstance(value, int):
-            return value.to_bytes(8, 'big')
+            return value.to_bytes(8, 'little', signed=True)
         elif isinstance(value, str):
-            return value.encode().ljust(self.slot_size, b'\0')
+            return value.encode().ljust(config.PAGE_SLOT_SIZE, b'\0')
         elif isinstance(value, bool):
             return struct.pack('>?', value)
         return None
@@ -129,7 +132,7 @@ class Page:
 
     #given a position, returns the physical address where the data is stored.
     def get_address(self, position):
-        return (self.get_slot_limit() * self.index + position) * self.slot_size
+        return (self.get_slot_limit() * self.index + position) * config.PAGE_SLOT_SIZE
 
     #returns the path of the requested binary file.
     def get_file_path(self, name):
@@ -142,14 +145,19 @@ class Page:
     #returns the value type that the column corresponds to.
     def get_column_type(self, index):
         with open(self.get_file_path('info'), "rb") as file:
-            return self.read_value_from_file(file, 1 + index, 'str')
+            return self.read_value_from_file(file, 2 + index, 'str')
 
     #retrieve a record containing values of specified columns at slot_index.
     def get_record(self, slot_index, projected_columns_index):
         for column, bit in enumerate(projected_columns_index):
             if bit == 1:
                 self.column_load_check(column)
-        return self.records[slot_index]
+        record = self.records[slot_index]
+        if self.old is not None:
+            old_indirection = self.old.records[slot_index].indirection
+            if old_indirection > record.indirection:
+                record.indirection = old_indirection
+        return record
 
     #write a value to specified position.
     def write_to_file(self, name, value, position):
@@ -198,17 +206,22 @@ class Page:
                 self.initialized = True
                 self.write_to_file('info', True, 0)
                 for i, v in enumerate(value.columns):
-                    self.write_to_file('info', str(type(v).__name__), 1 + i)
+                    self.write_to_file('info', str(type(v).__name__), 2 + i)
             if not self.dirty:
                 self.dirty = True
 
     #commit all the changes onto disk.
-    def commit(self):
+    def commit(self, push_meta=True, push_data=True):
         if not self.dirty:
             return
-        self.write_meta_to_file('rid')
-        self.write_meta_to_file('key')
-        self.write_meta_to_file('indirection')
-        for i in range(self.num_columns):
-            self.write_column_to_file(i)
+        self.write_to_file('info', self.num_records, 1)
+        if self.index == 0:
+            for i, v in enumerate(self.TPS):
+                self.write_to_file('info', v, 2 + self.num_columns + i)
+        if push_meta:
+            self.write_meta_to_file('rid')
+            self.write_meta_to_file('indirection')
+        if push_data:
+            for i in range(self.num_columns):
+                self.write_column_to_file(i)
 

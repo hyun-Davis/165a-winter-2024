@@ -2,6 +2,8 @@ from lstore.table import Table, Record
 from lstore.index import Index
 import math
 import time
+import threading
+from lstore import config
 
 class Query:
     """
@@ -31,7 +33,7 @@ class Query:
 
     #set rids of all records for deletion following the lineage to -1
     def delete_loop(self, page_id, from_record):
-        if from_record.rid == -1:
+        if from_record.indirection == -1:
             return
         from_record.rid = -1
         self.delete_loop(page_id, self.get_record(page_id, from_record.indirection, []))
@@ -43,11 +45,11 @@ class Query:
         if self.table.catalog['index'].indices[key_index] is not None:
             return self.table.catalog['index'].locate(key_index, key)
         for i in range(self.table.catalog['farthest']['pi'] + 1):
-            page = self.table.get_page(i, 0)
-            for j in range(page.get_slot_limit()):
-                if j not in page.records or not self.check_record_validity(page.get_record(j, projected_columns_index), key, key_index):
+            _page = self.table.get_page(i, 0)
+            for j in range(_page.get_slot_limit()):
+                if j not in _page.records or not self.check_record_validity(_page.get_record(j, projected_columns_index), key, key_index):
                     continue
-                return {'pi': i, 'rid': page.records[j].rid}
+                return {'pi': i, 'rid': _page.records[j].rid}
         return None
 
     #returns the next available slot in base page.
@@ -85,25 +87,29 @@ class Query:
 
     #given page_id and rid, retrieve a record containing values of specified columns.
     def get_record(self, page_id, rid, projected_columns_index):
-        slot_limit = math.floor(self.table.page_partition / self.table.slot_size)
-        page_index = math.floor(rid / slot_limit)
-        slot_index = rid % slot_limit
-        return self.table.get_page(page_id, page_index).get_record(slot_index, projected_columns_index)
+        return self.table.get_record(page_id, rid, projected_columns_index)
 
     #returns the latest version of a record by following indirection forward.
-    def get_latest_version_rid(self, page_id, from_rid):
-        indirection = self.get_record(page_id, from_rid, []).indirection
-        if indirection == -1:
-            return from_rid
-        return indirection
+    def get_latest_version_rid(self, page_id, base_rid):
+        return self.get_record(page_id, base_rid, []).indirection
 
     #returns the relative version of a record by following indirection backward.
-    def get_relative_version_rid(self, page_id, base_rid, relative_version):
+    def get_relative_version_rid(self, page_id, base_rid, relative_version, projected_columns_index=[]):
+        if relative_version == 0 and len(projected_columns_index) > 0:
+            indirection = self.get_latest_version_rid(page_id, base_rid)
+            _page = self.table.get_page(page_id, 0)
+            in_base = True
+            for column, bit in enumerate(projected_columns_index):
+                if bit == 1 and indirection > _page.TPS[column]:
+                    in_base = False
+                    break
+            if in_base:
+                return base_rid
         return self.relative_version_rid_loop(page_id, self.get_latest_version_rid(page_id, base_rid), base_rid, relative_version)
 
     def relative_version_rid_loop(self, page_id, from_rid, base_rid, relative_version):
         indirection = self.get_record(page_id, from_rid, []).indirection
-        if indirection == -1 or relative_version == 0 or from_rid == base_rid:
+        if indirection == -1 or relative_version == 0:
             return from_rid
         return self.relative_version_rid_loop(page_id, indirection, base_rid, relative_version + 1)
 
@@ -117,14 +123,14 @@ class Query:
         if self.table.catalog['index'].indices[key_index] is not None:
             info = self.table.catalog['index'].locate_range(start_range, end_range, key_index)
             for base in info:
-                result.append(self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version), projected_columns_index).columns[search_index])
+                result.append(self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version, projected_columns_index), projected_columns_index).columns[search_index])
             return result
         for i in range(self.table.catalog['farthest']['pi'] + 1):
             page = self.table.get_page(i, 0)
             for j in range(page.get_slot_limit()):
                 if j not in page.records or page.records[j].rid == -1:
                     continue
-                record = self.get_record(i, self.get_relative_version_rid(i, page.records[j].rid, relative_version))
+                record = self.get_record(i, self.get_relative_version_rid(i, page.records[j].rid, relative_version, projected_columns_index), projected_columns_index)
                 if not self.check_range(start_range, end_range, record.columns[key_index]):
                     continue
                 result.append(record.columns[search_index])
@@ -142,9 +148,12 @@ class Query:
         self.check_is_farthest(slot)
         page = self.table.get_page(slot['pi'], 0)
         rid = slot['slot_index']
-        new_record = Record(rid, 0, columns)
+        tail_rid = rid + math.floor(config.PAGE_SIZE / config.PAGE_SLOT_SIZE)
+        new_record = Record(rid, 0, columns, tail_rid)
         new_record.schema_encoding = '0' * self.table.num_columns
         page.write(new_record)
+        tail = self.table.get_page(slot['pi'], 1)
+        tail.write(Record(tail_rid, 0, columns))
         for i in range(len(columns)):
             if self.table.catalog['index'].indices[i] is not None:
                 self.table.catalog['index'].indices[i].insert_record(columns[i], rid, slot['pi'])
@@ -174,7 +183,7 @@ class Query:
     """
     def select_version(self, search_key, search_key_index, projected_columns_index, relative_version):
         base = self.find_base_record(search_key, search_key_index)
-        selected = [self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version), projected_columns_index)]
+        selected = [self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version, projected_columns_index), projected_columns_index)]
         return selected
 
 
@@ -192,7 +201,7 @@ class Query:
         last_rid = self.get_latest_version_rid(base['pi'], base['rid'])
         last_record = self.get_record(base['pi'], last_rid, projected_columns_index)
         index = self.table.catalog['stack_size'][base['pi']] - 1
-        if index == 0:
+        if index <= 1:
             tail = self.table.add_tail(base['pi'])
             index += 1
         else:
@@ -200,7 +209,7 @@ class Query:
         if not tail.has_capacity():
             tail = self.table.add_tail(base['pi'])
             index += 1
-        rid = index * math.floor(self.table.page_partition / self.table.slot_size) + tail.num_records
+        rid = index * math.floor(config.PAGE_SIZE / config.PAGE_SLOT_SIZE) + tail.num_records
         self.get_record(base['pi'], base['rid'], []).indirection = rid
         new_columns = []
         for k, v in enumerate(columns):
@@ -210,6 +219,10 @@ class Query:
                 new_columns.append(v)
         new_record = Record(rid, 0, new_columns, last_rid)
         tail.write(new_record)
+        self.table.catalog['update_count'][base['pi']] += 1
+        if self.table.catalog['update_count'][base['pi']] >= 2048:
+            self.table.catalog['update_count'][base['pi']] = 0
+            threading.Thread(target=lambda: self.table.merge(base['pi'])).start()
         return True
 
 

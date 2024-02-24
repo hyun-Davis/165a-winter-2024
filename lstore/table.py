@@ -2,9 +2,16 @@ import os
 
 from lstore.index import Index
 from lstore.page import Page, Record
-from lstore.config import *
 #from time import time
+from lstore import config
+import math
 import pickle
+
+
+INDIRECTION_COLUMN = 0
+RID_COLUMN = 1
+TIMESTAMP_COLUMN = 2
+SCHEMA_ENCODING_COLUMN = 3
 
 
 class Table:
@@ -16,13 +23,11 @@ class Table:
     """
     def __init__(self, name, num_columns, key, path = ''):
         self.path = path
-        self.page_partition = PAGE_SIZE
-        self.slot_size = PAGE_SLOT_SIZE
         self.name = name
         self.key = key
         self.num_columns = num_columns
         self.page_directory = {}
-        self.catalog = {'page_range': 0, 'stack_size': [], 'farthest': {'pi': 0, 'slot_index': -1}, 'num_columns': num_columns, 'key': key}
+        self.catalog = {'page_range': 0, 'stack_size': [], 'farthest': {'pi': 0, 'slot_index': -1}, 'num_columns': num_columns, 'key': key, 'update_count': []}
         self.catalog['index'] = Index(self)
 
     #access the specified page. if in bufferpool, it's returned directly.
@@ -44,7 +49,9 @@ class Table:
         self.page_directory[key] = Page(self.path, page_id, 0, self.num_columns)
         self.catalog['stack_size'].append(1)
         self.catalog['page_range'] += 1
+        self.catalog['update_count'].append(0)
         os.mkdir(f'{self.path}/stack{page_id}')
+        self.add_tail(page_id)
 
     #create a new tail page.
     def add_tail(self, page_id):
@@ -55,14 +62,51 @@ class Table:
         self.catalog['stack_size'][page_id] += 1
         return tail
 
-    def __merge(self):
-        print("merge is happening")
-        pass
+    #pin happens here on request for access
+    def get_record(self, page_id, rid, projected_columns_index):
+        slot_limit = math.floor(config.PAGE_SIZE / config.PAGE_SLOT_SIZE)
+        page_index = math.floor(rid / slot_limit)
+        slot_index = rid % slot_limit
+        _page = self.get_page(page_id, page_index)
+        _page.pin += 1
+        record = _page.get_record(slot_index, projected_columns_index)
+        _page.pin -= 1
+        return record
+
+    #merge a whole column into a base column.
+    def merge_column(self, _page, _copy, page_id, column):
+        projected_columns_index = [0] * (column + 1)
+        projected_columns_index[column] = 1
+        TPS = _page.TPS[column]
+        for i in range(_page.num_records):
+            record = _page.get_record(i, projected_columns_index)
+            if record.indirection == -1:
+                continue
+            tail_record = self.get_record(page_id, record.indirection, projected_columns_index)
+            if tail_record.rid > TPS:
+                TPS = tail_record.rid
+            _copy.records[i].columns[column] = tail_record.columns[column]
+        _copy.TPS[column] = TPS
+
+    #merge a whole page stack into a base page by merging the columns.
+    def merge(self, page_id):
+        #print("merge is happening")
+        _page = self.get_page(page_id, 0)
+        _copy = Page(_page.path, page_id, 0, _page.num_columns)
+        _copy.num_records = _page.num_records
+        for i in range(_page.num_records):
+            _copy.records[i] = Record(i, self.key, [None] * _page.num_columns, _page.get_record(i, []).indirection)
+        for column in range(_page.num_columns):
+            self.merge_column(_page, _copy, page_id, column)
+        _copy.dirty = True
+        _copy.old = _page
+        key = f'{page_id}-0'
+        self.page_directory[key] = _copy
 
     #commit all the changes onto disk.
     def commit(self):
         with open(f'{self.path}/catalog.pickle', 'wb') as file:
             pickle.dump(self.catalog, file)
-        for _page in self.page_directory.values():
-            if _page.dirty:
+        for key, _page in self.page_directory.items():
+            if _page.dirty and _page.pin == 0:
                 _page.commit()
