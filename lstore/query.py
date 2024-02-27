@@ -183,7 +183,12 @@ class Query:
     """
     def select_version(self, search_key, search_key_index, projected_columns_index, relative_version):
         base = self.find_base_record(search_key, search_key_index)
-        selected = [self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version, projected_columns_index), projected_columns_index)]
+        record = self.get_record(base['pi'], self.get_relative_version_rid(base['pi'], base['rid'], relative_version, projected_columns_index), projected_columns_index)
+        columns = []
+        for column, bit in enumerate(projected_columns_index):
+            if bit == 1:
+                columns.append(record.columns[column])
+        selected = [Record(record.rid, record.key, columns, record.indirection)]
         return selected
 
 

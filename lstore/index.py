@@ -120,8 +120,7 @@ class Index:
         col_data = self.indices[column]
         desired_node = col_data.find_largest_smaller_key(begin)
         if desired_node.value >= begin:
-            for i in range(len(desired_node.rid)):
-                found.append({'pi': desired_node.page_id[i], 'rid': desired_node.rid[i]})
+            found.append({'pi': desired_node.page_id[0], 'rid': desired_node.rid[0]})
 
         while desired_node.next is not None and desired_node.next <= end:
             # the first node found is actually the one smaller than begin.
