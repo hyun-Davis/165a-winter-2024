@@ -8,7 +8,8 @@ class Transaction:
     """
     def __init__(self):
         self.queries = []
-        pass
+        self.modified = []
+        self.table = None
 
     """
     # Adds the given query to this transaction
@@ -18,6 +19,8 @@ class Transaction:
     # t.add_query(q.update, grades_table, 0, *[None, 1, None, 2, None])
     """
     def add_query(self, query, table, *args):
+        if self.table is None:
+            self.table = table
         self.queries.append((query, args))
         # use grades_table for aborting
 
@@ -27,7 +30,7 @@ class Transaction:
         for query, args in self.queries:
             result = query(*args)
             # If the query has failed the transaction should abort
-            if result == False:
+            if result is False:
                 return self.abort()
         return self.commit()
 
@@ -40,4 +43,5 @@ class Transaction:
     def commit(self):
         # TODO: commit to database
         return True
+
 
